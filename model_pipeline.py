@@ -5,7 +5,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
@@ -106,6 +106,57 @@ def train_and_save_model() -> Dict[str, object]:
     }
 
 
+def get_model_summary() -> Dict[str, object]:
+    df = load_dataset()
+    model, scaler, label_encoder = load_model_artifacts()
+
+    X = df[FEATURE_COLUMNS]
+    y = df["label"]
+    y_encoded = label_encoder.transform(y)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_encoded, test_size=0.2, random_state=42
+    )
+
+    X_train_scaled = scaler.transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    predictions = model.predict(X_test_scaled)
+    accuracy = accuracy_score(y_test, predictions)
+
+    report = classification_report(
+        y_test,
+        predictions,
+        target_names=list(label_encoder.classes_),
+        output_dict=True,
+        zero_division=0,
+    )
+    cm = confusion_matrix(y_test, predictions)
+    feature_importances = dict(zip(FEATURE_COLUMNS, model.feature_importances_))
+
+    return {
+        "accuracy": round(float(accuracy), 4),
+        "classification_report": report,
+        "confusion_matrix": cm.tolist(),
+        "crops": sorted(list(label_encoder.classes_)),
+        "features": FEATURE_COLUMNS,
+        "feature_importances": feature_importances,
+        "algorithm": "RandomForestClassifier(n_estimators=220, random_state=42)",
+        "train_test_split": {
+            "train_size": int(len(X_train)),
+            "test_size": int(len(X_test)),
+            "random_state": 42,
+            "test_size_fraction": 0.2,
+        },
+    }
+
+
+def get_feature_importance_df() -> pd.DataFrame:
+    summary = get_model_summary()
+    importance_items = [(feature, score) for feature, score in summary["feature_importances"].items()]
+    importance_items.sort(key=lambda item: item[1], reverse=True)
+    return pd.DataFrame(importance_items, columns=["Feature", "Importance"])
+
+
 def load_model_artifacts() -> Tuple[object, object, object]:
     if not (os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH) and os.path.exists(ENCODER_PATH)):
         train_and_save_model()
@@ -116,11 +167,19 @@ def load_model_artifacts() -> Tuple[object, object, object]:
 
 
 def predict_crop(features: List[float]) -> str:
+    crop_name, _ = predict_crop_with_confidence(features)
+    return crop_name
+
+
+def predict_crop_with_confidence(features: List[float]) -> Tuple[str, float]:
     model, scaler, label_encoder = load_model_artifacts()
     features_array = np.array([features], dtype=float)
     scaled_features = scaler.transform(features_array)
     prediction = model.predict(scaled_features)[0]
-    return str(label_encoder.inverse_transform([prediction])[0])
+    probabilities = model.predict_proba(scaled_features)[0]
+    confidence = float(np.max(probabilities))
+    crop_name = str(label_encoder.inverse_transform([prediction])[0])
+    return crop_name, confidence
 
 
 def get_farming_tips(crop_name: str) -> List[str]:
